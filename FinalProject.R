@@ -100,6 +100,10 @@ mango_validator <- function() {
 # Check validations
 mango_validator()
 
+# VISUALISATIONS
+ggplot(mango, aes(x=variety)) + geom_histogram(stat="count", colour="darkblue", fill="darkblue") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
 # one hot encoding 
 cols_to_hold = c("arrival_date", "update_date", "min_price", "max_price", "modal_price")
 non_encoded_cols <- mango %>% select(any_of(cols_to_hold))
@@ -157,6 +161,43 @@ tr_ctrl <- trainControl(
   number = 5,     # 5-fold cross-validation
 )
 
+# Random Forest
+rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250)
+rf_pred = predict(rf_model, newdata = test)
+
+# SVM
+# training a Support Vector Machine Regression model using svmLinear
+svm_model = train(modal_price ~ ., data = train, method = "svmLinear", trControl = tr_ctrl)
+print(svm_model)
+svm_pred = predict(svm_model, newdata = test)
+
+# XGBoost
+tr_input_x <- as.matrix(select(train, -modal_price))
+tr_input_y <- train$modal_price
+ts_input_x <- as.matrix(select(test, -modal_price))
+ts_input_y <- test$modal_price
+
+d_train_data = xgb.DMatrix(data=tr_input_x, label = tr_input_y)
+d_test_data = xgb.DMatrix(data=ts_input_x, label = ts_input_y)
+
+watchlist = list(train=d_train_data, test=d_test_data)
+
+# model = xgb.train(data = d_train_data, max.depth = 6, watchlist=watchlist, nrounds = 450)
+# From the output, the RMSE just keeps dropping as the number of rounds is increased, so let's use MAE as the stopping criterion rather than RMSE.
+# MAE is less sensitive to outliers compared to RMSE because MAE does not square the errors. If your dataset contains significant outliers that you do not want to heavily penalize, MAE might be a better choice.
+# Will perform cross-validation to validate the results from the XGBoost model
+# Specifying evaluation metrics and displaying training and testing data at each of the 100 rounds (using MAE)
+# model <- xgb.train(data = xgb_train, max.depth = 3, watchlist = watchlist, nrounds = 100,
+#                    eval_metric = "mae")  # Using MAE as the evaluation metric
+#From the output we can see that the minimum testing MAE is achieved at the 72nd round. Beyond this point, the test MSE fluctuates instead of being always decreasing.
+#To avoid overfitting the data, we will fit the final XGBoost model with 72 rounds.
+
+xgb_model = xgboost(data=d_train_data, max.depth=6, nrounds = 100, verbose = FALSE)
+xgb_pred <- predict(xgb_model, newdata = d_test_data)
+
+
+
+
 grid <- expand.grid(mtry = c(2, 3, 4),        # Number of variables to sample as candidates at each split
                     ntree = c(500, 1000, 1500))
 
@@ -166,14 +207,6 @@ rf_tuned <- train(Species ~ .,                   # Formula for the model
                   trControl = ctrl,              # Training control settings
                   tuneGrid = grid)
 
-svm_model = train(modal_price ~ ., data = train, method = "svmLinear", trControl = tr_ctrl)
-svm_model = train(modal_price ~ ., data = test, method = "svmLinear", trControl = tr_ctrl)
-
-# metric = "rmse", # which metric should be optimized for (rmse, mae, R^2)
-set.seed(123)
-rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250)
-rf_model <- randomForest(modal_price ~ ., data = test,  trControl = tr_ctrl, ntree = 250)
-rf_model
 
 grid <- expand.grid(mtry = c(2, 3, 4),        # Number of variables to sample as candidates at each split
                     ntree = c(500, 1000, 1500))
@@ -254,6 +287,30 @@ tuneplot(xgb_tune)
 
 # We get the best tuning parameters
 xgb_tune$bestTune
+
+# Final results
+df_res = data.frame(
+  model = c("Random Forest", "SVR", "XGBoost"),
+  RMSE = c(
+    RMSE(rf_pred, test$modal_price),
+    RMSE(svm_pred, test$modal_price),
+    RMSE(xgb_pred, test$modal_price)
+  ),
+  R2 = c(
+    R2(rf_pred, test$modal_price),
+    R2(svm_pred, test$modal_price),
+    R2(xgb_pred, test$modal_price)
+  ),
+  MAE = c(
+    MAE(rf_pred, test$modal_price),
+    MAE(svm_pred, test$modal_price),
+    MAE(xgb_pred, test$modal_price)
+  )
+)
+df_res
+
+
+
 
 # Save model to RDS file
 saveRDS(xgb_tune, paste0(script_path(), .Platform$file.sep, "model.rds"))
