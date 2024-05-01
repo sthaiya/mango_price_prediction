@@ -21,7 +21,7 @@ script_path <- function(){
   )
 }
 
-model_path = paste0(script_path(), .Platform$file.sep, "rf_model.rds")
+model_path = paste0(script_path(), .Platform$file.sep, "model.rds")
 meta_data_path = paste0(script_path(), .Platform$file.sep, "meta_data.csv")
 
 if (file.exists(model_path) && file.exists(meta_data_path)) {
