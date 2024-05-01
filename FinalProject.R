@@ -113,17 +113,10 @@ encoded_cols <- data.frame(predict(dmy, newdata = to_encode))
 mango <- cbind(non_encoded_cols, encoded_cols)
 
 # Some mutations before computations: Encode character data into numeric and extract month
-mango$arrival_date <- as.Date(mango$arrival_date)
-
+mango$arrival_date <- as.numeric(as.Date(mango$arrival_date, format = "%d/%m/%Y"))
+summary(mango$arrival_date)
 # Recheck validation
 mango_validator()
-
-# We get p-value matrix and confidence intervals matrix using cor.mtest()
-# testRes = cor.mtest(mango%>%select_if(is.numeric), conf.level = 0.95)
-
-# co-relation matrix
-# corrplot(cor(mango%>%select_if(is.numeric)), method = "color", addCoef.col = "black", number.cex = 0.75,
-#          p.mat = testRes$p, insig = 'blank') # shows min_price and max_price with correlation to our output variable we thus drop them
 
 # view a after cleaning summary
 cols_to_drop = c("update_date", "min_price", "max_price")
@@ -144,8 +137,7 @@ mango <- mango %>% select(-any_of(cols_to_drop))
 ############################### MODEL TRAINING #################################
 ################################################################################
 
-# RF SVM XGBoost
-
+# Models to test: RF, SVM and XGBoost
 # Use caret's createDataPartition() to split dataset into a training and testing sets
 train_ind = createDataPartition(mango$modal_price, p = .7, list = F)
 train = mango[train_ind, ]
@@ -157,7 +149,7 @@ tr_ctrl <- trainControl(
 )
 
 # Random Forest
-rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250)
+rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250, mtry=3)
 rf_pred = predict(rf_model, newdata = test)
 
 # SVM
@@ -201,23 +193,45 @@ df_res = data.frame(
 )
 df_res
 
-# Tuning for RF Model
-tune_control <- trainControl(method="cv", number=5, search="grid")
-tune_grid <- expand.grid(mtry = c(1:10),        # Number of variables to sample as candidates at each split
-                    ntree = c(500, 1000, 1500))
+# Tuning for XGB Model
+# We start with nrounds from 200 as lower rounds gives very big errors
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = 1000, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 5, 6),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
 
-rf_tuned <- train(modal_price ~ .,                   # Formula for the model
-                  data = train,                   # Training data
-                  method = "rf",                 # Random Forest method
-                  trControl = tune_control,              # Training control settings
-                  tuneGrid = tune_grid)
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, # no training log
+  allowParallel = FALSE # FALSE for reproducible results 
+)
 
-# control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid")
-# set.seed(seed)
-# tunegrid <- expand.grid(.mtry=c(1:15))
-# rf_gridsearch <- train(Class~., data=dataset, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
-# print(rf_gridsearch)
-# plot(rf_gridsearch)
+xgb_tune <- caret::train(
+  x = tr_input_x,
+  y = tr_input_y,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbose = FALSE
+)
+
+tuneplot <- function(x, probs = .90) {
+  ggplot(x) +
+    coord_cartesian(ylim = c(quantile(x$results$RMSE, probs = probs), min(x$results$RMSE))) +
+    theme_bw()
+}
+
+tuneplot(xgb_tune)
+
+# We get the best tuning parameters
+xgb_tune$bestTune
+
 
 # Save the tuned model to RDS file
-saveRDS(rf_tuned, paste0(script_path(), .Platform$file.sep, "model.rds"))
+saveRDS(xgb_tune, paste0(script_path(), .Platform$file.sep, "model.rds"))
