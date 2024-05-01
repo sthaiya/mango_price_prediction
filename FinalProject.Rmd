@@ -1,3 +1,28 @@
+---
+title: "FInalProject"
+author: "SP24 RSS"
+date: "2024-05-01"
+output:
+  pdf_document:
+    df_print: kable
+    latex_engine: pdflatex
+  html_document:
+    number_sections: true
+    df_print: paged
+header-includes:
+  - \usepackage{titling}
+  - \usepackage{pmboxdraw}
+  - \setlength{\droptitle}{-1.1in}
+  - \posttitle{\par\end{center}\vskip -1in}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE,
+                      warnings=FALSE, fig.align='center',  eval=TRUE)
+```
+
+# Install Libraries for the project
+```{r}
 ################################################################################
 ###################### Install ML and visualization packages ###################
 ################################################################################
@@ -13,7 +38,10 @@ packages =c("tidyverse", "caret", "skimr", "corrplot", "googledrive", "janitor",
 
 # Respond with "Yes" if prompted on the console
 install_missing_packages(packages)
+```
 
+# Load the necessary dataset
+```{r}
 ################################################################################
 ############################## LOAD THE DATASET ################################
 ################################################################################
@@ -58,23 +86,31 @@ if (!file.exists(data_file_path)) {
 } else {
   mango = read.csv(data_file_path)
 }
+```
 
+# Data Cleaning and Validadation
+```{r}
 ################################################################################
 ######################## DATA LEARNING AND CLEANING ############################
 ################################################################################
 dim(mango) # the shape of our dataset
-head(mango) # first-k rows
 print(skim(mango)) # view a pre-data-cleaning summary
-gg_miss_var(mango, show_pct = TRUE) # Identify and address missing data
+head(mango) # first-k rows
 
 # Step 1: Some cleaning
 mango <- mango %>%
   remove_empty(which = c("rows", "cols"))# Remove completely empty rows or columns
 
+# remove paradata column and min/max price
+cols_to_drop = c("update_date", "min_price", "max_price")
+mango <- mango %>% select(-any_of(cols_to_drop))
+
+gg_miss_var(mango, show_pct = TRUE) # Identify and address missing data
+
 # filter(variety != "Other") %>% # remove where variety is other
 
 # Step 2: Identify and drop duplicates
-get_dupes(mango) %>% head(5) # show duplicates
+# get_dupes(mango) %>% head(5) # show duplicates
 # mango <- mango %>% distinct(.keep_all = TRUE) # remove duplicates
 
 # Step 3: show columns with only one value
@@ -117,11 +153,10 @@ mango$arrival_date <- as.numeric(as.Date(mango$arrival_date, format = "%d/%m/%Y"
 
 # Recheck validation
 mango_validator()
+```
 
-# view a after cleaning summary
-cols_to_drop = c("update_date", "min_price", "max_price")
-mango <- mango %>% select(-any_of(cols_to_drop))
-
+# Model Training.
+```{r}
 ################################################################################
 ############################### MODEL TRAINING #################################
 ################################################################################
@@ -181,47 +216,4 @@ df_res = data.frame(
   )
 )
 df_res
-
-# Tuning for XGB Model
-# We start with nrounds from 200 as lower rounds gives very big errors
-tune_grid <- expand.grid(
-  nrounds = seq(from = 200, to = 1000, by = 50),
-  eta = c(0.025, 0.05, 0.1, 0.3),
-  max_depth = c(2, 3, 4, 5, 6),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 1,
-  subsample = 1
-)
-
-tune_control <- caret::trainControl(
-  method = "cv", # cross-validation
-  number = 5, # with n folds 
-  verboseIter = FALSE, # no training log
-  allowParallel = FALSE # FALSE for reproducible results 
-)
-
-xgb_tune <- caret::train(
-  x = tr_input_x,
-  y = tr_input_y,
-  trControl = tune_control,
-  tuneGrid = tune_grid,
-  method = "xgbTree",
-  verbose = FALSE
-)
-
-tuneplot <- function(x, probs = .90) {
-  ggplot(x) +
-    coord_cartesian(ylim = c(quantile(x$results$RMSE, probs = probs), min(x$results$RMSE))) +
-    theme_bw()
-}
-
-tuneplot(xgb_tune)
-
-# We get the best tuning parameters
-xgb_tune$bestTune
-# nrounds max_depth eta gamma colsample_bytree min_child_weight subsample
-# 450     6         4 0.1     0                1                1         1
-
-# Save the tuned model to RDS file
-saveRDS(xgb_tune, paste0(script_path(), .Platform$file.sep, "model.rds"))
+```
