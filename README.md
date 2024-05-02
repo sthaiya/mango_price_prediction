@@ -1,2 +1,4 @@
-# mango_price_prediction
-Predicting mango prices in R
+# Mango Price Forecasting Using Machine Learning Algorithms
+To run this project
+1. clone this repository
+2. 
