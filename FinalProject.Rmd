@@ -101,7 +101,7 @@ get_dupes(mango) %>% head(5) # show duplicates
 # remove columns with only one value
 mango <- mango %>% remove_constant() #remove columns with only constants
 
-# Step 4: validate dates and numerical data
+# validate dates and numerical data
 mango_validator <- function() {
   report <- data_validation_report()
   data.validator::validate(mango, name = "Mango Dataset") %>%
@@ -394,11 +394,10 @@ R-Squared = 0.3107045: An R-squared value of 31.07045% implies that the XGBoost 
 
 **VIP for the Tuned Model**
 
-```{r}
 ##To produce the Variable Importance Plot for the XGBoost model
 # Get feature importance
 importance_matrix <- xgb.importance(feature_names = colnames(xgb_train), model = final_22)
 
 # Plot the Variable Importance Plot (bar graph format available only)
 xgb.plot.importance(importance_matrix, top_n = 10)
-```
+
