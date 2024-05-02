@@ -22,6 +22,7 @@ knitr::opts_chunk$set(echo=TRUE, message=FALSE,
 ```
 
 # Install Libraries for the project
+
 ```{r}
 ################################################################################
 ###################### Install ML and visualization packages ###################
@@ -41,15 +42,16 @@ packages =c("tidyverse", "caret", "skimr", "corrplot", "googledrive", "janitor",
 install_missing_packages(packages)
 ```
 
-# Load the necessary dataset
+# Load the necessary datasets
+
 ```{r}
 ############################## LOAD THE DATASET ################################
 mango = read.csv(url("https://raw.githubusercontent.com/sthaiya/mango_price_prediction/main/Mango_2023.csv"))
 ```
 
-# Data Cleaning and Validadation
-```{r}
+# Data Cleaning and Validation
 
+```{r}
 ################################################################################
 ######################## DATA LEARNING AND CLEANING ############################
 ################################################################################
@@ -82,15 +84,45 @@ summary(anova_variety)
 #Between "arrival_date" and "modal_price"
 anova_arrival_date<-aov(modal_price ~ arrival_date, data=mango)
 summary(anova_arrival_date)
-#Significant: State, District, Market, Variety, Arrival_Date
-#A statistically significant difference in mean modal price of mangoes across the states, districts, between the markets, varieties, and arrival dates.
-
 
 #View the structure of the data
 str(mango)
 summary(mango)
 
 set.seed(2)
+
+# Some cleaning
+mango <- mango %>%
+  remove_empty(which = c("rows", "cols"))# Remove completely empty rows or columns
+
+# Identify and drop duplicates
+get_dupes(mango) %>% head(5) # show duplicates
+# mango <- mango %>% distinct(.keep_all = TRUE) # duplicates were kept due to lack more information
+
+# remove columns with only one value
+mango <- mango %>% remove_constant() #remove columns with only constants
+
+# Step 4: validate dates and numerical data
+mango_validator <- function() {
+  report <- data_validation_report()
+  data.validator::validate(mango, name = "Mango Dataset") %>%
+    validate_if(min_price >= 0, description = "We cant have negative Min Price") %>%
+    validate_if(max_price >= 0, description = "We cant have negative Max Price") %>%
+    validate_if(modal_price >= 0, description = "We cant have negative Modal Price") %>%
+    validate_if(lubridate::is.Date(arrival_date), description = "Arrival date has all Date values") %>%
+    add_results(report)
+  
+  print(report)
+  
+  # save_report(report, success = TRUE)
+  # browseURL("validation_report.html")
+}
+# Check validations
+mango_validator()
+
+# VISUALISATIONS
+ggplot(mango, aes(x=variety)) + geom_histogram(stat="count", colour="darkblue", fill="darkblue") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
 # Change the data type of the "arrival_date" column in the mango dataset
 mango$arrival_date<-as.Date(mango$arrival_date)
@@ -106,7 +138,10 @@ new_mango$modal_price<-mango$modal_price
 new_mango$arrival_date<-mango$arrival_date
 ```
 
+Data validation and showed that `State, District, Market, Variety, Arrival_Date` were significant There is a statistically significant difference in mean modal price of mangoes across the states, districts, between the markets, varieties, and arrival dates.
+
 # Model Training.
+
 ```{r}
 ################################################################################
 ############################### MODEL TRAINING #################################
@@ -122,17 +157,29 @@ tr_ctrl <- trainControl(
   method = "cv",  # Cross-validation
   number = 5,     # 5-fold cross-validation
 )
+```
 
+**Random Forest**
+
+```{r}
 # Random Forest
 rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250, mtry=3)
 rf_pred = predict(rf_model, newdata = test)
+```
 
-# SVM
-# training a Support Vector Machine Regression model using svmLinear
-svm_model = train(modal_price ~ ., data = train, method = "svmLinear", trControl = tr_ctrl)
+**SVR**
+
+```{r}
+# SVM through Caret
+# training a Support Vector Machine Regression model using svmRadial
+svm_model = train(modal_price ~ ., data = train, method = "svmRadial", trControl = tr_ctrl)
 print(svm_model)
 svm_pred = predict(svm_model, newdata = test)
+```
 
+**XGBoost**
+
+```{r}
 # XGBoost
 tr_input_x <- as.matrix(select(train, -modal_price))
 tr_input_y <- train$modal_price
@@ -146,7 +193,11 @@ watchlist = list(train=d_train_data, test=d_test_data)
 
 xgb_model = xgboost(data=d_train_data, max.depth=6, nrounds = 100, verbose = FALSE)
 xgb_pred <- predict(xgb_model, newdata = d_test_data)
+```
 
+**Baseline Model Results**
+
+```{r}
 # Test results
 df_res = data.frame(
   model = c("Random Forest", "SVR", "XGBoost"),
@@ -169,18 +220,15 @@ df_res = data.frame(
 df_res
 ```
 
-# ModelTuning
+# Model Tuning
+
 ```{r}
-# Tuning the XGBoost Model
+# Tuning the selected XGBoost Model
 #Perform the cross-validations based on minimized RMSE
 # Define the parameters
 params <- list(booster = "gbtree", objective = "reg:squarederror", eta=0.3, gamma=0, subsample=1, colsample_bytree=1)
 
 # To perform a grid search
-# Define a grid of nrounds and max_depth values to try
-#nrounds_values <- c(1, 5, 10, 15, 20, 25)
-#max_depth_values <- c(1, 2, 3, 4, 5, 6)
-
 #Testing nrounds = 1, max_depth = 1
 cv_1<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
 
@@ -313,72 +361,47 @@ for (i in seq_along(cv_list)) {
 print(paste("The model with the lowest RMSE is: ", min_rmse_cv))
 print(paste("The model with the lowest MAE is: ", min_mae_cv))
 
-
 #The model with the lowest RMSE was "cv_22"; the model with the lowest MAE was "cv_36".
 #Try fitting an XGBoost Model with nrounds=15, max_depth=4 ("cv_22") and nrounds=25, max_depth=6 ("cv_36")
 final_22 = xgboost(data = xgb_train, nrounds = 15, max_depth = 4, verbose = 0)
 final_36 = xgboost(data = xgb_train, nrounds = 25, max_depth = 6, verbose = 0)
-
 
 # Generate predictions on the test data with two potential best XGBoost models
 pred_y_22 <- predict(final_22, xgb_test)  # Make predictions on test data
 pred_y_36 <- predict(final_36, xgb_test)
 
 #To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest RMSE ("cv_22")
-mean((test_y - pred_y_22)^2) #mse
-MAE(test_y, pred_y_22) #mae
-RMSE(test_y, pred_y_22) #rmse
-R2(pred_y_22, test_y) #R-Squared
+mean((test_y - pred_y_22)^2) #mse [1] 38572180 ***
+MAE(test_y, pred_y_22) #mae [1] 1613.641
+RMSE(test_y, pred_y_22) #rmse [1] 6210.651 ***
+R2(pred_y_22, test_y) #R-Squared [1] 0.3107045 ***
 
 #To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest MAE ("cv_36")
-mean((test_y - pred_y_36)^2) #mse
-MAE(test_y, pred_y_36) #mae
-RMSE(test_y, pred_y_36) #rmse
-R2(pred_y_36, test_y) #R-Squared
+mean((test_y - pred_y_36)^2) #mse [1] 41214078
+MAE(test_y, pred_y_36) #mae [1] 1440.424
+RMSE(test_y, pred_y_36) #rmse [1] 6419.819
+R2(pred_y_36, test_y) #R-Squared [1] 0.2722947 
+```
 
-#To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest RMSE ("cv_22")
-#  > mean((test_y - pred_y_22)^2) #mse
-#[1] 38572180 ***
-#> MAE(test_y, pred_y_22) #mae
-#[1] 1613.641 v
-#> RMSE(test_y, pred_y_22) #rmse
-#[1] 6210.651 ***
-#> R2(pred_y_22, test_y) #R-Squared
-#[1] 0.3107045 ***
-#The root mean squared error turns out to be $6210.651. This represents the average difference between the prediction made for the modal mango price and the actual modal mango prices in the test set.
-#MAE = $1613.641: The MAE of $1613.641 signifies that, on average, the absolute difference between the model's predicted modal mango prices and modal mango prices in the test set is approximately $1613.641. 
+The root mean squared error turns out to be 6210.651. This represents the average difference between the prediction made for the modal mango price and the actual modal mango prices in the test set. MAE = 1613.641: The MAE of 1613.641 signifies that, on average, the absolute difference between the model's predicted modal mango prices and modal mango prices in the test set is approximately 1613.641.
 
-#(In this context, MAE is the average of the absolute differences between predicted and observed values. MAE is directly interpretable and represents the average magnitude of errors without considering the direction. A lower MAE indicates better performance in terms of the absolute error.)
+(In this context, MAE is the average of the absolute differences between predicted and observed values. MAE is directly interpretable and represents the average magnitude of errors without considering the direction. A lower MAE indicates better performance in terms of the absolute error.)
 
+RMSE = 6210.651: An RMSE of 6210.651 means that, on average, the model's predicted modal mango prices differs from the actual modal mango price values by approximately 6210.651.
 
+(The RMSE represents the square root of the average of the squared differences between predicted and observed values. RMSE penalizes larger errors more heavily than MAE due to the squaring operation.)
 
-#RMSE = $6210.651: An RMSE of $6210.651 means that, on average, the model's predicted modal mango prices differs from the actual modal mango price values by approximately $6210.651. 
+R-Squared = 0.3107045: An R-squared value of 31.07045% implies that the XGBoost model explains about 2.56% of the variance in the target variable, i.e., the modal mango price. This very low R-squared value indicates that the model's predicted modal mango prices does not align with the actual modal mango prices at all and captures minimal portion of the variability in the data.
 
-#(The RMSE represents the square root of the average of the squared differences between predicted and observed values. RMSE penalizes larger errors more heavily than MAE due to the squaring operation.)
+(R-squared measures the proportion of variance explained by the model.)
 
+**VIP for the Tuned Model**
 
-#R-Squared = 0.3107045:  An R-squared value of 31.07045% implies that the XGBoost model explains about 2.56% of the variance in the target variable, i.e., the modal mango price. This very low R-squared value indicates that the model's predicted modal mango prices does not align with the actual modal mango prices at all and captures minimal portion of the variability in the data.
-
-#(R-squared measures the proportion of variance explained by the model.)
-
-
-#  > #To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest MAE ("cv_36")
-#  > mean((test_y - pred_y_36)^2) #mse
-#[1] 41214078
-#> MAE(test_y, pred_y_36) #mae
-#[1] 1440.424
-#> RMSE(test_y, pred_y_36) #rmse
-#[1] 6419.819
-#> R2(pred_y_36, test_y) #R-Squared
-#[1] 0.2722947 
-
+```{r}
 ##To produce the Variable Importance Plot for the XGBoost model
 # Get feature importance
 importance_matrix <- xgb.importance(feature_names = colnames(xgb_train), model = final_22)
 
 # Plot the Variable Importance Plot (bar graph format available only)
 xgb.plot.importance(importance_matrix, top_n = 10)
-
-# Save the FINAL tuned model to RDS file
-saveRDS(final_22, paste0(script_path(), .Platform$file.sep, "model.rds"))
 ```
