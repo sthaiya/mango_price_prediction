@@ -1,5 +1,5 @@
 ---
-title: "FInalProject"
+title: "FinalProject"
 author: "SP24 RSS"
 date: "2024-05-01"
 output:
