@@ -66,7 +66,6 @@ sum(is.na(mango))
 
 #Bivariate Analysis - One-Way ANOVA tests; Computed the MAE, MSE, RMSE, R-Squared on the  
 #GeneratedVariance Importance Plot for the XGBoost Model and the Random Forest Model
-#Only if you find including Bivariable Analysis in the report is necessary
 
 #Perform Bivariable Analysis: conduct one-way anova between each predictor and the outcome "modal_price"
 #Between "state" and "modal_price"
@@ -95,7 +94,7 @@ set.seed(2)
 mango <- mango %>%
   remove_empty(which = c("rows", "cols"))# Remove completely empty rows or columns
 
-# Identify and drop duplicates
+# Identify duplicates
 get_dupes(mango) %>% head(5) # show duplicates
 # mango <- mango %>% distinct(.keep_all = TRUE) # duplicates were kept due to lack more information
 
@@ -106,8 +105,6 @@ mango <- mango %>% remove_constant() #remove columns with only constants
 mango_validator <- function() {
   report <- data_validation_report()
   data.validator::validate(mango, name = "Mango Dataset") %>%
-    validate_if(min_price >= 0, description = "We cant have negative Min Price") %>%
-    validate_if(max_price >= 0, description = "We cant have negative Max Price") %>%
     validate_if(modal_price >= 0, description = "We cant have negative Modal Price") %>%
     validate_if(lubridate::is.Date(arrival_date), description = "Arrival date has all Date values") %>%
     add_results(report)
@@ -138,7 +135,7 @@ new_mango$modal_price<-mango$modal_price
 new_mango$arrival_date<-mango$arrival_date
 ```
 
-Data validation and showed that `State, District, Market, Variety, Arrival_Date` were significant There is a statistically significant difference in mean modal price of mangoes across the states, districts, between the markets, varieties, and arrival dates.
+Data validation and showed that `State, District, Market, Variety, Arrival_Date` were significant. There is a statistically significant difference in mean modal price of mangoes across the states, districts, between the markets, varieties, and arrival dates.
 
 # Model Training.
 
