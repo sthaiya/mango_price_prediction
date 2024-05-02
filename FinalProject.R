@@ -8,56 +8,15 @@ install_missing_packages <- function(pkg){
   ignore <- sapply(pkg, require, character.only = TRUE) # Load the Library
 }
 
-packages =c("tidyverse", "caret", "skimr", "corrplot", "googledrive", "janitor", "naniar", 
-            "data.validator", "CatEncoders", "randomForest", "xgboost")
+packages =c("tidyverse", "caret", "skimr", "corrplot", "googledrive", "janitor", 
+            "naniar", "pROC", "dplyr", "data.table", "data.validator", 
+            "randomForest", "xgboost", "ggplot2")
 
 # Respond with "Yes" if prompted on the console
 install_missing_packages(packages)
 
-################################################################################
 ############################## LOAD THE DATASET ################################
-################################################################################
-script_path <- function(){
-  this_file = gsub("--file=", "", commandArgs()[grepl("--file", commandArgs())])
-  ifelse (length(this_file) > 0, 
-          paste(head(strsplit(this_file, '[/|\\]')[[1]], -1), collapse = .Platform$file.sep),
-          dirname(rstudioapi::getSourceEditorContext()$path)
-  )
-}
-
-data_file = "data_file.csv"
-data_file_path = paste0(script_path(), .Platform$file.sep, data_file)
-
-if (!file.exists(data_file_path)) {
-  drive_deauth()
-  folder_id = drive_get(as_id("https://drive.google.com/drive/folders/10ze7uyKYysH5tCfWb2gam-5SvkFS7iz2"))
-  
-  #find files in folder
-  files = drive_ls(folder_id)
-  
-  #mkdir
-  tmp_dir = paste0(script_path(), .Platform$file.sep, "tmp", .Platform$file.sep)
-  unlink(tmp_dir, recursive = TRUE)
-  dir.create(tmp_dir)
-  
-  #loop dirs and download files inside them
-  for (i in seq_along(files$name)) {
-    try({
-      if (files$name[i] == "Mango_2023.csv") { ## Remove this check to load all data ~80,000 records
-        drive_download(as_id(files$id[i]), path = str_c(tmp_dir,files$name[i]))
-      }
-    })
-  }
-  
-  mango <- list.files(path=tmp_dir, full.names = TRUE) %>% 
-    lapply(read_csv) %>% 
-    bind_rows 
-  
-  write.csv(mango, file = data_file_path, row.names = FALSE)
-  unlink(tmp_dir, recursive = TRUE)
-} else {
-  mango = read.csv(data_file_path)
-}
+mango = read.csv(url("https://raw.githubusercontent.com/sthaiya/mango_price_prediction/main/Mango_2023.csv"))
 
 ################################################################################
 ######################## DATA LEARNING AND CLEANING ############################
@@ -65,72 +24,64 @@ if (!file.exists(data_file_path)) {
 dim(mango) # the shape of our dataset
 head(mango) # first-k rows
 print(skim(mango)) # view a pre-data-cleaning summary
-gg_miss_var(mango, show_pct = TRUE) # Identify and address missing data
 
-# Step 1: Some cleaning
-mango <- mango %>%
-  remove_empty(which = c("rows", "cols"))# Remove completely empty rows or columns
+#Exclude the "min_price" and the "max_price" from the dataset
+mango<-mango %>% select(-4,-7,-8,-10)
+sum(is.na(mango))
+#No missing values in any relevant column/variable. (Pairwise deletion applied in lieu of listwise deletion)
 
-# filter(variety != "Other") %>% # remove where variety is other
+#Bivariate Analysis - One-Way ANOVA tests; Computed the MAE, MSE, RMSE, R-Squared on the  
+#GeneratedVariance Importance Plot for the XGBoost Model and the Random Forest Model
+#Only if you find including Bivariable Analysis in the report is necessary
 
-# Step 2: Identify and drop duplicates
-get_dupes(mango) %>% head(5) # show duplicates
-# mango <- mango %>% distinct(.keep_all = TRUE) # remove duplicates
+#Perform Bivariable Analysis: conduct one-way anova between each predictor and the outcome "modal_price"
+#Between "state" and "modal_price"
+anova_state<-aov(modal_price ~ state, data=mango)
+summary(anova_state)
+#Between "district" and "modal_price"
+anova_district<-aov(modal_price ~ district, data=mango)
+summary(anova_district)
+#Between "market" and "modal_price"
+anova_market<-aov(modal_price ~ market, data=mango)
+summary(anova_market)
+#Between "variety" and "modal_price"
+anova_variety<-aov(modal_price ~ variety, data=mango)
+summary(anova_variety)
+#Between "arrival_date" and "modal_price"
+anova_arrival_date<-aov(modal_price ~ arrival_date, data=mango)
+summary(anova_arrival_date)
+#Significant: State, District, Market, Variety, Arrival_Date
+#A statistically significant difference in mean modal price of mangoes across the states, districts, between the markets, varieties, and arrival dates.
 
-# Step 3: show columns with only one value
-mango %>% purrr::keep(~length(unique(.x)) == 1) %>% head(5) # Show first 5 rows
-mango <- mango %>% remove_constant() #remove columns with only constants
 
-# Step 4: validate dates and numerical data
-mango_validator <- function() {
-  report <- data_validation_report()
-  data.validator::validate(mango, name = "Mango Dataset") %>%
-    validate_if(min_price >= 0, description = "We cant have negative Min Price") %>%
-    validate_if(max_price >= 0, description = "We cant have negative Max Price") %>%
-    validate_if(modal_price >= 0, description = "We cant have negative Modal Price") %>%
-    validate_if(lubridate::is.Date(arrival_date), description = "Arrival date has all Date values") %>%
-    add_results(report)
-  
-  print(report)
-  
-  # save_report(report, success = TRUE)
-  # browseURL("validation_report.html")
-}
-# Check validations
-mango_validator()
+#View the structure of the data
+str(mango)
+summary(mango)
 
-# VISUALISATIONS
-ggplot(mango, aes(x=variety)) + geom_histogram(stat="count", colour="darkblue", fill="darkblue") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-# one hot encoding 
 set.seed(2)
-cols_to_hold = c("arrival_date", "update_date", "min_price", "max_price", "modal_price")
-non_encoded_cols <- mango %>% select(any_of(cols_to_hold))
-to_encode <- mango %>% select(-any_of(cols_to_hold))
-dmy <- dummyVars(~ ., data = to_encode)
-encoded_cols <- data.frame(predict(dmy, newdata = to_encode))
-mango <- cbind(non_encoded_cols, encoded_cols)
 
-# Some mutations before computations: Encode character data into numeric and extract month
-mango$arrival_date <- as.numeric(as.Date(mango$arrival_date, format = "%d/%m/%Y"))
+# Change the data type of the "arrival_date" column in the mango dataset
+mango$arrival_date<-as.Date(mango$arrival_date)
 
-# Recheck validation
-mango_validator()
+# Create dummy variables
+# Specify the columns you want to dummy encode
+dummy <- dummyVars(" ~ state + district + market + variety", data=mango)
 
-# view a after cleaning summary
-cols_to_drop = c("update_date", "min_price", "max_price")
-mango <- mango %>% select(-any_of(cols_to_drop))
+# use one hot encoding for the categorical variables
+new_mango <- data.frame(predict(dummy, newdata = mango))
+
+new_mango$modal_price<-mango$modal_price
+new_mango$arrival_date<-mango$arrival_date
 
 ################################################################################
 ############################### MODEL TRAINING #################################
 ################################################################################
 
 # Models to test: RF, SVM and XGBoost
-# Use caret's createDataPartition() to split dataset into a training and testing sets
-train_ind = createDataPartition(mango$modal_price, p = .7, list = F)
-train = mango[train_ind, ]
-test = mango[-train_ind, ]
+#Split the data into training (70%) and testing (30%)
+parts = createDataPartition(new_mango$modal_price, p = .7, list = F)
+train = new_mango[parts, ]
+test = new_mango[-parts, ]
 
 tr_ctrl <- trainControl(
   method = "cv",  # Cross-validation
@@ -141,25 +92,29 @@ tr_ctrl <- trainControl(
 rf_model <- randomForest(modal_price ~ ., data = train,  trControl = tr_ctrl, ntree = 250, mtry=3)
 rf_pred = predict(rf_model, newdata = test)
 
-# SVM
-# training a Support Vector Machine Regression model using svmLinear
-svm_model = train(modal_price ~ ., data = train, method = "svmLinear", trControl = tr_ctrl)
-print(svm_model)
+# SVR through Caret
+svm_model = train(modal_price ~ ., data = train, method = "svmRadial", trControl = tr_ctrl)
 svm_pred = predict(svm_model, newdata = test)
 
-# XGBoost
-tr_input_x <- as.matrix(select(train, -modal_price))
-tr_input_y <- train$modal_price
-ts_input_x <- as.matrix(select(test, -modal_price))
-ts_input_y <- test$modal_price
+## Fitting XGBoost Model
+# Define predictors and response variable in the training set
+train_x = data.matrix(train[, !names(train) %in% "modal_price"])
+train_y = train[,"modal_price"]
 
-d_train_data = xgb.DMatrix(data=tr_input_x, label = tr_input_y)
-d_test_data = xgb.DMatrix(data=ts_input_x, label = ts_input_y)
+# Define predictors and response variable in the testing set
+test_x = data.matrix(test[, !names(test) %in% "modal_price"])
+test_y = test[,"modal_price"]
 
-watchlist = list(train=d_train_data, test=d_test_data)
+# Define final training and testing sets
+xgb_train = xgb.DMatrix(data = train_x, label = train_y)
+xgb_test = xgb.DMatrix(data = test_x, label = test_y)
 
-xgb_model = xgboost(data=d_train_data, max.depth=6, nrounds = 100, verbose = FALSE)
-xgb_pred <- predict(xgb_model, newdata = d_test_data)
+# Define watchlist
+watchlist = list(train=xgb_train, test=xgb_test)
+
+#Fitting the XGBoost model with the default parameters for model selection, first attempt (trial) fix nrounds = 10
+xgb_model = xgboost(data = xgb_train, nrounds = 100, verbose = 0)
+xgb_pred <- predict(xgb_model, xgb_test)
 
 # Test results
 df_res = data.frame(
@@ -182,46 +137,214 @@ df_res = data.frame(
 )
 df_res
 
-# Tuning for XGB Model
-# We start with nrounds from 200 as lower rounds gives very big errors
-tune_grid <- expand.grid(
-  nrounds = seq(from = 200, to = 1000, by = 50),
-  eta = c(0.025, 0.05, 0.1, 0.3),
-  max_depth = c(2, 3, 4, 5, 6),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 1,
-  subsample = 1
-)
 
-tune_control <- caret::trainControl(
-  method = "cv", # cross-validation
-  number = 5, # with n folds 
-  verboseIter = FALSE, # no training log
-  allowParallel = FALSE # FALSE for reproducible results 
-)
+# Tuning the XGBoost Model
+#Perform the cross-validations based on minimized RMSE
+# Define the parameters
+params <- list(booster = "gbtree", objective = "reg:squarederror", eta=0.3, gamma=0, subsample=1, colsample_bytree=1)
 
-xgb_tune <- caret::train(
-  x = tr_input_x,
-  y = tr_input_y,
-  trControl = tune_control,
-  tuneGrid = tune_grid,
-  method = "xgbTree",
-  verbose = FALSE
-)
+# To perform a grid search
+# Define a grid of nrounds and max_depth values to try
+#nrounds_values <- c(1, 5, 10, 15, 20, 25)
+#max_depth_values <- c(1, 2, 3, 4, 5, 6)
 
-tuneplot <- function(x, probs = .90) {
-  ggplot(x) +
-    coord_cartesian(ylim = c(quantile(x$results$RMSE, probs = probs), min(x$results$RMSE))) +
-    theme_bw()
+#Testing nrounds = 1, max_depth = 1
+cv_1<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 1
+cv_2<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 1
+cv_3<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 1
+cv_4<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 1
+cv_5<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 1
+cv_6<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 1, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 1, max_depth = 2
+cv_7<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 2
+cv_8<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 2
+cv_9<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 2
+cv_10<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 2
+cv_11<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 2
+cv_12<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 2, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 1, max_depth = 3
+cv_13<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 3
+cv_14<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 3
+cv_15<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 3
+cv_16<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 3
+cv_17<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 3
+cv_18<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 3, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 1, max_depth = 4
+cv_19<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 4
+cv_20<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 4
+cv_21<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 4
+cv_22<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 4
+cv_23<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 4
+cv_24<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 4, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 1, max_depth = 5
+cv_25<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 5
+cv_26<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 5
+cv_27<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 5
+cv_28<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 5
+cv_29<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 5; unable to run due to high RAM
+cv_30<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 5, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 1, max_depth = 6
+cv_31<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 1, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 5, max_depth = 6
+cv_32<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 5, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 10, max_depth = 6
+cv_33<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 10, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 15, max_depth = 6
+cv_34<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 15, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 20, max_depth = 6
+cv_35<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 20, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+#Testing nrounds = 25, max_depth = 6
+cv_36<-xgb.cv(data = xgb_train, nfold = 5, nrounds = 25, max_depth = 6, objective = "reg:squarederror", metrics = list("rmse","mae"))
+
+# Create a list of all cv objects
+cv_list <- list(cv_1, cv_2, cv_3, cv_4, cv_5, cv_6, cv_7, cv_8, cv_9, cv_10, cv_11, cv_12, cv_13, cv_14, cv_15, cv_16, cv_17, cv_18, cv_19, cv_20, cv_21, cv_22, cv_23, cv_24, cv_25, cv_26, cv_27, cv_28, cv_29, cv_30, cv_31, cv_32, cv_33, cv_34, cv_35, cv_36)
+
+# Initialize variables to store the minimum RMSE and MAE
+min_rmse <- Inf
+min_mae <- Inf
+
+# Loop over the list and update the minimum RMSE and MAE
+for (i in seq_along(cv_list)) {
+  cv <- cv_list[[i]]
+  if (min(cv$evaluation_log$test_rmse_mean) < min_rmse) {
+    min_rmse <- min(cv$evaluation_log$test_rmse_mean)
+    min_rmse_cv <- paste("cv_", i, sep = "")
+  }
+  if (min(cv$evaluation_log$test_mae_mean) < min_mae) {
+    min_mae <- min(cv$evaluation_log$test_mae_mean)
+    min_mae_cv <- paste("cv_", i, sep = "")
+  }
 }
 
-tuneplot(xgb_tune)
+# Print the cv_ that gives the lowest RMSE and MAE
+print(paste("The model with the lowest RMSE is: ", min_rmse_cv))
+print(paste("The model with the lowest MAE is: ", min_mae_cv))
 
-# We get the best tuning parameters
-xgb_tune$bestTune
-# nrounds max_depth eta gamma colsample_bytree min_child_weight subsample
-# 450     6         4 0.1     0                1                1         1
+
+#The model with the lowest RMSE was "cv_22"; the model with the lowest MAE was "cv_36".
+#Try fitting an XGBoost Model with nrounds=15, max_depth=4 ("cv_22") and nrounds=25, max_depth=6 ("cv_36")
+final_22 = xgboost(data = xgb_train, nrounds = 15, max_depth = 4, verbose = 0)
+final_36 = xgboost(data = xgb_train, nrounds = 25, max_depth = 6, verbose = 0)
+
+
+# Generate predictions on the test data with two potential best XGBoost models
+pred_y_22 <- predict(final_22, xgb_test)  # Make predictions on test data
+pred_y_36 <- predict(final_36, xgb_test)
+
+#To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest RMSE ("cv_22")
+mean((test_y - pred_y_22)^2) #mse
+MAE(test_y, pred_y_22) #mae
+RMSE(test_y, pred_y_22) #rmse
+R2(pred_y_22, test_y) #R-Squared
+
+#To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest MAE ("cv_36")
+mean((test_y - pred_y_36)^2) #mse
+MAE(test_y, pred_y_36) #mae
+RMSE(test_y, pred_y_36) #rmse
+R2(pred_y_36, test_y) #R-Squared
+
+#To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest RMSE ("cv_22")
+#  > mean((test_y - pred_y_22)^2) #mse
+#[1] 38572180 ***
+#> MAE(test_y, pred_y_22) #mae
+#[1] 1613.641 v
+#> RMSE(test_y, pred_y_22) #rmse
+#[1] 6210.651 ***
+#> R2(pred_y_22, test_y) #R-Squared
+#[1] 0.3107045 ***
+#The root mean squared error turns out to be $6210.651. This represents the average difference between the prediction made for the modal mango price and the actual modal mango prices in the test set.
+#MAE = $1613.641: The MAE of $1613.641 signifies that, on average, the absolute difference between the model's predicted modal mango prices and modal mango prices in the test set is approximately $1613.641. 
+
+#(In this context, MAE is the average of the absolute differences between predicted and observed values. MAE is directly interpretable and represents the average magnitude of errors without considering the direction. A lower MAE indicates better performance in terms of the absolute error.)
+
+
+
+#RMSE = $6210.651: An RMSE of $6210.651 means that, on average, the model's predicted modal mango prices differs from the actual modal mango price values by approximately $6210.651. 
+
+#(The RMSE represents the square root of the average of the squared differences between predicted and observed values. RMSE penalizes larger errors more heavily than MAE due to the squaring operation.)
+
+
+#R-Squared = 0.3107045:  An R-squared value of 31.07045% implies that the XGBoost model explains about 2.56% of the variance in the target variable, i.e., the modal mango price. This very low R-squared value indicates that the model's predicted modal mango prices does not align with the actual modal mango prices at all and captures minimal portion of the variability in the data.
+
+#(R-squared measures the proportion of variance explained by the model.)
+
+
+#  > #To calculate the testing MSE, MAE, RMSE, and R-Squared associated with the XGBoost prediction model with the lowest MAE ("cv_36")
+#  > mean((test_y - pred_y_36)^2) #mse
+#[1] 41214078
+#> MAE(test_y, pred_y_36) #mae
+#[1] 1440.424
+#> RMSE(test_y, pred_y_36) #rmse
+#[1] 6419.819
+#> R2(pred_y_36, test_y) #R-Squared
+#[1] 0.2722947 
+
+##To produce the Variable Importance Plot for the XGBoost model
+# Get feature importance
+importance_matrix <- xgb.importance(feature_names = colnames(xgb_train), model = final_22)
+
+# Plot the Variable Importance Plot (bar graph format available only)
+xgb.plot.importance(importance_matrix, top_n = 10)
 
 # Save the tuned model to RDS file
-saveRDS(xgb_tune, paste0(script_path(), .Platform$file.sep, "model.rds"))
+saveRDS(final_22, paste0(script_path(), .Platform$file.sep, "model.rds"))
